@@ -33,6 +33,6 @@ pub fn get_time<'a, T: TimestampSupplier>(
 }
 
 // Assumes that the container is sorted by timestamp
-pub fn get_latest<'a, T: TimestampSupplier>(container: &'a Vec<T>) -> Option<&'a T> {
+pub fn get_latest<T: TimestampSupplier>(container: & Vec<T>) -> Option<&T> {
     container.last()
 }

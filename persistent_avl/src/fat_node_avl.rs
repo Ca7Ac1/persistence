@@ -1,257 +1,90 @@
-use std::cell::UnsafeCell;
-use std::collections::VecDeque;
+use std::borrow::BorrowMut;
+use std::cmp::max;
 
+use crate::fat_node::*;
 use crate::persistent_avl_tree::PersistentAvlTree;
-use crate::timestamp::{get_latest, get_time, TimestampSupplier};
+use crate::timestamp::{get_latest, get_time};
 
-type FatNodePtr<'a, Data: Ord> = &'a UnsafeCell<FatNode<'a, Data>>;
-
-fn get_fat_ptr_ref<'a, Data: Ord>(ptr: FatNodePtr<'a, Data>) -> &'a FatNode<'a, Data> {
-    unsafe { &*ptr.get() }
-}
-
-fn get_fat_ptr_mut<'a, Data: Ord>(ptr: FatNodePtr<'a, Data>) -> &'a mut FatNode<'a, Data> {
-    unsafe { &mut *ptr.get() }
-}
-
-#[derive(Copy, Clone, Debug)]
-struct DataTime<'a, Data: Ord> {
-    timestamp: u64,
-    left: Option<FatNodePtr<'a, Data>>,
-    right: Option<FatNodePtr<'a, Data>>,
-}
-
-impl<'a, Data: Ord> TimestampSupplier for DataTime<'a, Data> {
-    type Timestamp = u64;
-
-    fn get_timestamp(&self) -> &Self::Timestamp {
-        &self.timestamp
-    }
-}
-
-// Invariant: Children are in sorted order by timestamp
-struct FatNode<'a, Data: Ord> {
-    datum: Data,
-    height: u64,
-    children: Vec<DataTime<'a, Data>>,
-}
-
-impl<'a, Data: Ord> FatNode<'a, Data> {
-    fn modify(&mut self, new_data: DataTime<'a, Data>) {
-        self.children.push(new_data);
-    }
-}
-
-struct FatNodeHead<'a, Data: Ord> {
-    timestamp: u64,
-    head: Option<FatNodePtr<'a, Data>>,
-}
-
-impl<'a, Data: Ord> TimestampSupplier for FatNodeHead<'a, Data> {
-    type Timestamp = u64;
-
-    fn get_timestamp(&self) -> &Self::Timestamp {
-        &self.timestamp
-    }
-}
-
-pub struct FatNodeAvl<'a, Data: Ord> {
-    node_arena: Vec<Box<UnsafeCell<FatNode<'a, Data>>>>,
-    heads: Vec<FatNodeHead<'a, Data>>,
+pub struct FatNodeAvl<Data: Ord> {
+    node_arena: Vec<Box<FatNode<Data>>>,
+    root_nodes: Vec<RootNode>,
     last_time: u64,
 }
 
-impl<'a, Data: Ord> FatNodeAvl<'a, Data> {
-    fn balance_rr(
-        &mut self,
-        root_ptr: FatNodePtr<'a, Data>,
-        timestamp: u64,
-    ) -> FatNodePtr<'a, Data> {
-        let root: &mut FatNode<'a, Data> = get_fat_ptr_mut(root_ptr);
-        let children: &DataTime<'a, Data> =
-            get_latest(&root.children).expect("Failed to find children for right rotation");
-
-        let root_left: Option<FatNodePtr<'a, Data>> = children.left;
-        let root_right: Option<FatNodePtr<'a, Data>> = children.right;
-
-        let new_root_ptr: FatNodePtr<'a, Data> =
-            root_right.expect("Failed to find right child for right rotate");
-
-        let new_root: &mut FatNode<'a, Data> = get_fat_ptr_mut(new_root_ptr);
-        let new_children =
-            get_latest(&new_root.children).expect("Failed to find right child for right rotate");
-
-        let new_root_left: Option<FatNodePtr<'a, Data>> = new_children.left;
-        let new_root_right: Option<FatNodePtr<'a, Data>> = new_children.right;
-
-        new_root.modify(DataTime {
-            timestamp: timestamp,
-            left: Some(root_ptr),
-            right: new_root_right,
-        });
-        root.modify(DataTime {
-            timestamp: timestamp,
-            left: root_left,
-            right: new_root_left,
-        });
-
-        new_root_ptr
-    }
-
-    fn balance_ll(
-        &mut self,
-        root_ptr: FatNodePtr<'a, Data>,
-        timestamp: u64,
-    ) -> FatNodePtr<'a, Data> {
-        let root: &mut FatNode<'a, Data> = get_fat_ptr_mut(root_ptr);
-        let children: &DataTime<'a, Data> =
-            get_latest(&root.children).expect("Failed to find children for right rotation");
-
-        let root_left: Option<FatNodePtr<'a, Data>> = children.left;
-        let root_right: Option<FatNodePtr<'a, Data>> = children.right;
-
-        let new_root_ptr: FatNodePtr<'a, Data> =
-            root_left.expect("Failed to find right child for right rotate");
-
-        let new_root: &mut FatNode<'a, Data> = get_fat_ptr_mut(new_root_ptr);
-        let new_children =
-            get_latest(&new_root.children).expect("Failed to find right child for right rotate");
-
-        let new_root_left: Option<FatNodePtr<'a, Data>> = new_children.left;
-        let new_root_right: Option<FatNodePtr<'a, Data>> = new_children.right;
-
-        new_root.modify(DataTime {
-            timestamp: timestamp,
-            left: new_root_left,
-            right: Some(root_ptr),
-        });
-        root.modify(DataTime {
-            timestamp: timestamp,
-            left: new_root_right,
-            right: root_right,
-        });
-
-        new_root_ptr
-    }
-
-    fn balance_lr(
-        &mut self,
-        root_ptr: FatNodePtr<'a, Data>,
-        timestamp: u64,
-    ) -> FatNodePtr<'a, Data> {
-        todo!()
-    }
-
-    fn balance_rl(
-        &mut self,
-        root_ptr: FatNodePtr<'a, Data>,
-        timestamp: u64,
-    ) -> FatNodePtr<'a, Data> {
-        todo!()
-    }
-
-    fn balance(&mut self, timestamp: u64, mut prev: Vec<FatNodePtr<'a, Data>>) {
-        while !prev.is_empty() {
-            self.balance_one(timestamp, &mut prev);
+impl<Data: Ord> FatNodeAvl<Data> {
+    fn get_height(&self, node_ptr: Option<usize>) -> u64 {
+        match node_ptr {
+            Some(node_ptr) => self.node_arena[node_ptr].height,
+            None => 0,
         }
     }
 
-    fn balance_one(&mut self, timestamp: u64, prev: &mut Vec<FatNodePtr<'a, Data>>) {
-        todo!();
+    fn balance_rr(&mut self, old_root_ptr: usize, timestamp: u64) -> usize {
+        let old_root = self.node_arena[old_root_ptr].as_ref();
+
+        let children =
+            get_latest(&old_root.children).expect("Failed to find children for right rotation");
+        let old_root_left = children.left;
+        let old_root_right = children.right;
+
+        let new_root_ptr = old_root_right.expect("Failed to find right child for right rotate");
+        let new_root = self.node_arena[new_root_ptr].as_ref();
+
+        let children = get_latest(&new_root.children)
+            .expect("Failed to find right grandchildren for right rotate");
+        let new_root_left = children.left;
+        let new_root_right = children.right;
+
+        let old_root_height = max(
+            self.get_height(old_root_left),
+            self.get_height(new_root_left),
+        );
+        let new_root_height = max(
+            self.get_height(old_root_right),
+            self.get_height(new_root_right),
+        );
+
+        self.node_arena[old_root_ptr].modify_right(timestamp, old_root_height, new_root_left);
+        self.node_arena[new_root_ptr].modify_left(timestamp, new_root_height, old_root_right);
+
+        new_root_ptr
     }
 }
 
-impl<'a, T: Ord> PersistentAvlTree<'a> for FatNodeAvl<'a, T> {
-    type Data = T;
+impl<Data: Ord> PersistentAvlTree for FatNodeAvl<Data> {
+    type Data = Data;
     type Timestamp = u64;
-
-    fn insert(&'a mut self, item: Self::Data) -> Self::Timestamp {
-        self.node_arena.push(Box::new(UnsafeCell::new(FatNode {
-            datum: item,
-            height: 0,
-            children: Vec::new(),
-        })));
-
-        let mut prev: Vec<FatNodePtr<'a, Self::Data>> = vec![];
-        {
-            let new_node: = &**self.node_arena.last().expect("Empty heads") as *mut UnsafeCell<FatNode<'a, T>>;
-
-            let head_ptr = get_latest(&self.heads);
-
-            match head_ptr.and_then(|head| head.head) {
-                Some(parent_ptr) => {
-
-                    let mut parent = get_fat_ptr_mut(parent_ptr);
-                    let mut child_ptr = Some(parent_ptr);
-                    while let Some(next) = child_ptr {
-                        prev.push(next);
-                        parent = get_fat_ptr_mut(next);
-
-                        child_ptr = get_latest(&parent.children).and_then(|children_at_time| {
-                            if parent.datum <= get_fat_ptr_ref(new_node).datum {
-                                children_at_time.right
-                            } else {
-                                children_at_time.left
-                            }
-                        });
-                    }
-
-                    let children = get_latest(&parent.children);
-                    if parent.datum <= get_fat_ptr_ref(new_node).datum {
-                        parent.modify(DataTime {
-                            timestamp: self.last_time,
-                            left: children.and_then(|children_at_time| children_at_time.left),
-                            right: Some(new_node),
-                        });
-                    } else {
-                        parent.modify(DataTime {
-                            timestamp: self.last_time,
-                            left: Some(new_node),
-                            right: children.and_then(|children_at_time| children_at_time.right),
-                        });
-                    }
-                }
-                None => {
-                    self.heads.push(FatNodeHead {
-                        timestamp: self.last_time,
-                        head: Some(new_node),
-                    });
-                }
-            };
-
-        }
-        
-        self.balance_one(self.last_time, &mut prev);
-
-        self.last_time += 1;
-        self.last_time - 1
-    }
-
-    fn delete(&'a mut self, item: Self::Data) -> Option<Self::Timestamp> {
+    
+    fn insert(&mut self, item: Self::Data) -> Self::Timestamp {
         todo!()
     }
-
-    fn contains(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> bool {
+    
+    fn delete(&mut self, item: Self::Data) -> Option<Self::Timestamp> {
+        todo!()
+    }
+    
+    fn contains(&self, item: &Self::Data, timestamp: Self::Timestamp) -> bool {
         match self.predecessor(item, timestamp) {
             Some(predecessor) => *item == *predecessor,
             None => false,
         }
     }
-
-    fn predecessor(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data> {
-        let mut root: Option<FatNodePtr<'a, T>> = get_time(&self.heads, &timestamp)?.head;
+    
+    fn predecessor(&self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data> {
+        let mut node_ptr = get_time(&self.root_nodes, &timestamp)?.root;
         let mut inf: Option<&Self::Data> = None;
-        while let Some(node_ptr) = root {
-            let node: &FatNode<'a, T> = unsafe { &*node_ptr.get() };
-            let children: Option<&DataTime<'a, T>> = get_time(&node.children, &timestamp);
+
+        while let Some(current_ptr) = node_ptr {
+            let node = self.node_arena[current_ptr].as_ref();
+            let children= get_time(&node.children, &timestamp);
 
             match children {
                 Some(children) => {
                     if node.datum > *item {
-                        root = children.left;
+                        node_ptr = children.left;
                     } else {
                         inf = Some(&node.datum);
-                        root = children.right;
+                        node_ptr = children.right;
                     }
                 }
                 None => break,
@@ -260,21 +93,22 @@ impl<'a, T: Ord> PersistentAvlTree<'a> for FatNodeAvl<'a, T> {
 
         inf
     }
-
-    fn successor(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data> {
-        let mut root: Option<FatNodePtr<'a, T>> = get_time(&self.heads, &timestamp)?.head;
+    
+    fn successor(&self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data> {
+        let mut node_ptr = get_time(&self.root_nodes, &timestamp)?.root;
         let mut sup: Option<&Self::Data> = None;
-        while let Some(node_ptr) = root {
-            let node: &FatNode<'a, T> = unsafe { &*node_ptr.get() };
-            let children: Option<&DataTime<'a, T>> = get_time(&node.children, &timestamp);
+
+        while let Some(current_ptr) = node_ptr {
+            let node = self.node_arena[current_ptr].as_ref();
+            let children= get_time(&node.children, &timestamp);
 
             match children {
                 Some(children) => {
                     if node.datum < *item {
-                        root = children.right;
+                        node_ptr = children.right;
                     } else {
                         sup = Some(&node.datum);
-                        root = children.left;
+                        node_ptr = children.left;
                     }
                 }
                 None => break,
