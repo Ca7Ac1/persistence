@@ -38,22 +38,31 @@ impl<Data: Ord> FatNode<Data> {
     }
 
     pub(crate) fn modify_left(&mut self, timestamp: u64, height: u64, new_left: Option<usize>) {
-        self.children.push(ChildrenAtTime {
-            timestamp: timestamp,
-            left: new_left,
-            right: self.children.last().and_then(|children| children.right),
-        });
-
+        match self.children.last_mut().filter(|last_children| last_children.timestamp == timestamp) {
+            // When last children exist & match your timestamp, just mutate instead
+            Some(last_children) => last_children.left = new_left,
+            None => self.children.push(ChildrenAtTime {
+                timestamp: timestamp,
+                left: new_left,
+                right: self.children.last().and_then(|children| children.right),
+            }),
+        };
+        
         self.height = height;
     }
 
     pub(crate) fn modify_right(&mut self, timestamp: u64, height: u64, new_right: Option<usize>) {
-        self.children.push(ChildrenAtTime {
-            timestamp: timestamp,
-            left: self.children.last().and_then(|children| children.left),
-            right: new_right,
-        });
 
+        match self.children.last_mut().filter(|last_children| last_children.timestamp == timestamp) {
+            // When last children exist & match your timestamp, just mutate instead
+            Some(last_children) => last_children.right = new_right,
+            None => self.children.push(ChildrenAtTime {
+                timestamp: timestamp,
+                left: self.children.last().and_then(|children| children.left),
+                right: new_right,
+            }),
+        };
+        
         self.height = height;
     }
 }
