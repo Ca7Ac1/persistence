@@ -1,11 +1,11 @@
-pub trait PersistentAvlTree {
+pub trait PersistentAvlTree<'a> {
     type Data: Ord;
     type Timestamp;
 
-    fn insert(&mut self, item: Self::Data) -> Self::Timestamp;
-    fn delete(&mut self, item: Self::Data) -> Self::Timestamp;
+    fn insert(&'a mut self, item: Self::Data) -> Self::Timestamp;
+    fn delete(&'a mut self, item: Self::Data) -> Option<Self::Timestamp>;
 
-    fn contains(&self, item: &Self::Data, timestamp: Self::Timestamp) -> bool;
-    fn predecessor(&self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data>;
-    fn successor(&self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&Self::Data>;
+    fn contains(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> bool;
+    fn predecessor(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&'a Self::Data>;
+    fn successor(&'a self, item: &Self::Data, timestamp: Self::Timestamp) -> Option<&'a Self::Data>;
 }
