@@ -1,20 +1,13 @@
 use std::cmp::max;
-use std::process::Child;
 
 use crate::fat_node_avl::fat_node::{FatNode, RootNode};
 use crate::persistent_avl_tree::PersistentAvlTree;
-use crate::timestamp::get_time;
+use crate::timestamp::{self, get_time};
 
 pub struct FatNodeAvl<Data: Ord> {
     node_arena: Vec<FatNode<Data>>,
     root_nodes: Vec<RootNode>,
     last_time: u64,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Direction {
-    LEFT,
-    RIGHT,
 }
 
 impl<Data: Ord> FatNodeAvl<Data> {
@@ -24,7 +17,7 @@ impl<Data: Ord> FatNodeAvl<Data> {
             .last_mut()
             .filter(|last_root| last_root.timestamp == timestamp)
         {
-            Some(last_root_same_time) => last_root_same_time.root = new_node_ptr,
+            Some(same_root) => same_root.root = new_node_ptr,
             None => self.root_nodes.push(RootNode {
                 timestamp,
                 root: new_node_ptr,
@@ -32,336 +25,52 @@ impl<Data: Ord> FatNodeAvl<Data> {
         }
     }
 
-    fn get_height(&self, node_ptr: Option<usize>) -> u64 {
-        match node_ptr {
-            Some(node_ptr) => self.node_arena[node_ptr].height,
-            None => 0,
-        }
-    }
-
-    /// Rotating mutates affected fat nodes
-    /// by adding a new entry with new pointers with the provided timestamp.
-    /// Or if it already exists, modifying that entry
-    fn rotate_left(&mut self, old_root_ptr: usize, timestamp: u64) -> usize {
-        let old_root = &self.node_arena[old_root_ptr];
-
-        let children = old_root
-            .children
-            .last()
-            .expect("Failed to find children for left rotation");
-        let old_root_left = children.left;
-        let old_root_right = children.right;
-
-        let new_root_ptr = old_root_right.expect("Failed to find right child for left rotation");
-        let new_root = &self.node_arena[new_root_ptr];
-
-        let children = new_root
-            .children
-            .last()
-            .expect("Failed to find right grandchildren for left rotation");
-        let new_root_left = children.left;
-        let new_root_right = children.right;
-
-        let old_root_height = max(
-            self.get_height(old_root_left),
-            self.get_height(new_root_left),
-        ) + 1;
-        let new_root_height = max(old_root_height, self.get_height(new_root_right)) + 1;
-
-        self.node_arena[old_root_ptr].modify_right(timestamp, old_root_height, new_root_left);
-        self.node_arena[new_root_ptr].modify_left(timestamp, new_root_height, Some(old_root_ptr));
-
-        new_root_ptr
-    }
-
-    fn rotate_right(&mut self, old_root_ptr: usize, timestamp: u64) -> usize {
-        let old_root = &self.node_arena[old_root_ptr];
-
-        let children = old_root
-            .children
-            .last()
-            .expect("Failed to find children for right rotation");
-        let old_root_left = children.left;
-        let old_root_right = children.right;
-
-        let new_root_ptr = old_root_left.expect("Failed to find left child for right rotation");
-        let new_root = &self.node_arena[new_root_ptr];
-
-        let children = new_root
-            .children
-            .last()
-            .expect("Failed to find left grandchildren for right rotation");
-        let new_root_left = children.left;
-        let new_root_right = children.right;
-
-        let old_root_height = max(
-            self.get_height(old_root_right),
-            self.get_height(new_root_right),
-        ) + 1;
-        let new_root_height = max(old_root_height, self.get_height(new_root_left)) + 1;
-
-        self.node_arena[old_root_ptr].modify_left(timestamp, old_root_height, new_root_right);
-        self.node_arena[new_root_ptr].modify_right(timestamp, new_root_height, Some(old_root_ptr));
-
-        new_root_ptr
-    }
-
-    /// Given the traversal path to an inserted/deleted node starting from the root
-    /// and ending at the parent of the inserted/deleted node, updates the heights.
-    fn update_heights(&mut self, modification_path: &Vec<usize>) {
-        modification_path.iter().rev().for_each(|node_ptr| {
-            let children = self.node_arena[*node_ptr].children.last();
-
-            let child_height = match children {
-                None => 0,
-                Some(children) => {
-                    let left_height = children
-                        .left
-                        .map_or(0, |left_child| self.node_arena[left_child].height);
-                    let right_height = children
-                        .right
-                        .map_or(0, |right_child| self.node_arena[right_child].height);
-
-                    max(left_height, right_height)
-                }
-            };
-
-            self.node_arena[*node_ptr].height = child_height + 1;
-        });
-    }
-
-    /// Returns the right subtree height minus the left subtree height of a node
-    fn balance_factor(&self, node_ptr: usize) -> i64 {
+    /// Calculates the height of a node assuming its childrens heights are set
+    fn set_height(&mut self, node_ptr: usize) {
         let children = self.node_arena[node_ptr].children.last();
-        match children {
+
+        let child_height = match children {
+            None => 0,
             Some(children) => {
                 let left_height = children
                     .left
-                    .map_or(0, |left_child| self.node_arena[left_child].height)
-                    as i64;
+                    .map_or(0, |left_child| self.node_arena[left_child].height);
                 let right_height = children
                     .right
-                    .map_or(0, |right_child| self.node_arena[right_child].height)
-                    as i64;
+                    .map_or(0, |right_child| self.node_arena[right_child].height);
 
-                right_height - left_height
+                max(left_height, right_height)
             }
-            None => 0,
-        }
+        };
+
+        self.node_arena[node_ptr].height = child_height + 1;
     }
 
-    fn is_latest_left_child(&self, proposed_parent: usize, proposed_child: usize) -> bool {
-        self.node_arena[proposed_parent]
-            .children
-            .last()
-            .map_or(false, |latest_children| {
-                latest_children.left == Some(proposed_child)
-            })
+    fn balance_node(&mut self, timestamp: u64, node_ptr: usize) -> usize {
+        !todo!()
     }
 
-    fn is_latest_right_child(&self, proposed_parent: usize, proposed_child: usize) -> bool {
-        self.node_arena[proposed_parent]
-            .children
-            .last()
-            .map_or(false, |latest_children| {
-                latest_children.right == Some(proposed_child)
-            })
-    }
+    /// Calculates the heights and rebalances the tree up `path`
+    ///
+    /// Returns the element at the root of `path` after modifications are complete
+    fn balance(&mut self, timestamp: u64, path: &Vec<usize>) -> Option<usize> {
+        let mut child_ptr = *path.last()?;
 
-    fn replace_parents_child(
-        &mut self,
-        original_child_ptr_index: usize,
-        new_child_ptr: usize,
-        path: &Vec<usize>,
-        timestamp: u64,
-    ) {
-        if original_child_ptr_index == 0 {
-            self.modify_root(Some(new_child_ptr), timestamp);
-        } else {
-            let original_child_ptr = path[original_child_ptr_index];
-            let parent_ptr = path[original_child_ptr_index - 1];
-            if self.is_latest_left_child(parent_ptr, original_child_ptr) {
-                let new_height = max(
-                    self.get_height(Some(new_child_ptr)),
-                    self.get_height(
-                        self.node_arena[parent_ptr]
-                            .children
-                            .last()
-                            .and_then(|children| children.right),
-                    ),
-                );
-                self.node_arena[parent_ptr].modify_left(
-                    timestamp,
-                    new_height + 1,
-                    Some(new_child_ptr),
-                );
+        path.iter().rev().skip(1).for_each(|&parent_ptr| {
+            self.set_height(child_ptr);
+            child_ptr = self.balance_node(timestamp, child_ptr);
+
+            if self.node_arena[parent_ptr].datum <= self.node_arena[child_ptr].datum {
+                self.node_arena[parent_ptr].modify_left(timestamp, Some(child_ptr));
             } else {
-                let new_height = max(
-                    self.get_height(Some(new_child_ptr)),
-                    self.get_height(
-                        self.node_arena[parent_ptr]
-                            .children
-                            .last()
-                            .and_then(|children| children.left),
-                    ),
-                );
-                self.node_arena[parent_ptr].modify_right(
-                    timestamp,
-                    new_height + 1,
-                    Some(new_child_ptr),
-                );
+                self.node_arena[parent_ptr].modify_right(timestamp, Some(child_ptr));
             }
-        }
-    }
 
-    /// Given the traversal path with directions to inserted/deleted node (root to parent of inserted/deleted node),
-    /// Balances the lowest height unbalanced node
-    /// Returns the index into the path at which a balance occurred on that node pointer, or None if it did not occur
-    fn balance_lowest(
-        &mut self,
-        modification_path: &Vec<usize>,
-        end_direction: Direction,
-        timestamp: u64,
-    ) -> Option<usize> {
-        // Special case for last two
-        let index = modification_path.len() - 2;
-        let node_ptr = modification_path[modification_path.len() - 2];
-        let child_ptr = modification_path[modification_path.len() - 1];
-        let b = self.balance_factor(node_ptr);
-        if b >= 2 {
-            // RL
-            if let Direction::LEFT = end_direction {
-                let replacement = self.rotate_right(child_ptr, timestamp);
-                self.replace_parents_child(index + 1, replacement, modification_path, timestamp);
-            }
-            // RR
-            let replacement = self.rotate_left(node_ptr, timestamp);
-            self.replace_parents_child(index, replacement, modification_path, timestamp);
-            return Some(index);
-        } else if b <= -2 {
-            // LR
-            if let Direction::RIGHT = end_direction {
-                let replacement = self.rotate_left(child_ptr, timestamp);
-                self.replace_parents_child(index + 1, replacement, modification_path, timestamp);
-            }
-            // LL
-            let replacement = self.rotate_right(node_ptr, timestamp);
-            self.replace_parents_child(index, replacement, modification_path, timestamp);
-            return Some(index);
-        }
+            child_ptr = parent_ptr;
+        });
 
-        // General case
-        for (index, node_and_child_ptrs) in
-            Iterator::zip(0..modification_path.len() - 2, modification_path.windows(3)).rev()
-        {
-            let node_ptr = node_and_child_ptrs[0];
-            let child_ptr = node_and_child_ptrs[1];
-            let grandchild_ptr = node_and_child_ptrs[2];
-            let b = self.balance_factor(node_ptr);
-            if b >= 2 {
-                // RL
-                if self.is_latest_left_child(child_ptr, grandchild_ptr) {
-                    let replacement = self.rotate_right(child_ptr, timestamp);
-                    self.replace_parents_child(
-                        index + 1,
-                        replacement,
-                        modification_path,
-                        timestamp,
-                    );
-                }
-                // RR
-                let replacement = self.rotate_left(node_ptr, timestamp);
-                self.replace_parents_child(index, replacement, modification_path, timestamp);
-                return Some(index);
-            } else if b <= -2 {
-                // LR
-                if self.is_latest_right_child(child_ptr, grandchild_ptr) {
-                    let replacement = self.rotate_left(child_ptr, timestamp);
-                    self.replace_parents_child(
-                        index + 1,
-                        replacement,
-                        modification_path,
-                        timestamp,
-                    );
-                }
-                // LL
-                let replacement = self.rotate_right(node_ptr, timestamp);
-                self.replace_parents_child(index, replacement, modification_path, timestamp);
-                return Some(index);
-            }
-        }
-        None
-    }
-
-    fn balance_all(
-        &mut self,
-        modification_path: &Vec<usize>,
-        end_direction: Direction,
-        timestamp: u64,
-    ) {
-        // Special case for last two
-        let index = modification_path.len() - 2;
-        let node_ptr = modification_path[modification_path.len() - 2];
-        let child_ptr = modification_path[modification_path.len() - 1];
-        let b = self.balance_factor(node_ptr);
-        if b >= 2 {
-            // RL
-            if let Direction::LEFT = end_direction {
-                let replacement = self.rotate_right(child_ptr, timestamp);
-                self.replace_parents_child(index + 1, replacement, modification_path, timestamp);
-            }
-            // RR
-            let replacement = self.rotate_left(node_ptr, timestamp);
-            self.replace_parents_child(index, replacement, modification_path, timestamp);
-        } else if b <= -2 {
-            // LR
-            if let Direction::RIGHT = end_direction {
-                let replacement = self.rotate_left(child_ptr, timestamp);
-                self.replace_parents_child(index + 1, replacement, modification_path, timestamp);
-            }
-            // LL
-            let replacement = self.rotate_right(node_ptr, timestamp);
-            self.replace_parents_child(index, replacement, modification_path, timestamp);
-        }
-
-        // General case
-        for (index, node_and_child_ptrs) in
-            Iterator::zip(0..modification_path.len() - 2, modification_path.windows(3)).rev()
-        {
-            let node_ptr = node_and_child_ptrs[0];
-            let child_ptr = node_and_child_ptrs[1];
-            let grandchild_ptr = node_and_child_ptrs[2];
-            let b = self.balance_factor(node_ptr);
-            if b >= 2 {
-                // RL
-                if self.is_latest_left_child(child_ptr, grandchild_ptr) {
-                    let replacement = self.rotate_right(child_ptr, timestamp);
-                    self.replace_parents_child(
-                        index + 1,
-                        replacement,
-                        modification_path,
-                        timestamp,
-                    );
-                }
-                // RR
-                let replacement = self.rotate_left(node_ptr, timestamp);
-                self.replace_parents_child(index, replacement, modification_path, timestamp);
-            } else if b <= -2 {
-                // LR
-                if self.is_latest_right_child(child_ptr, grandchild_ptr) {
-                    let replacement = self.rotate_left(child_ptr, timestamp);
-                    self.replace_parents_child(
-                        index + 1,
-                        replacement,
-                        modification_path,
-                        timestamp,
-                    );
-                }
-                // LL
-                let replacement = self.rotate_right(node_ptr, timestamp);
-                self.replace_parents_child(index, replacement, modification_path, timestamp);
-            }
-        }
+        self.set_height(child_ptr);
+        Some(self.balance_node(timestamp, child_ptr))
     }
 }
 
@@ -380,60 +89,37 @@ impl<Data: Ord> PersistentAvlTree for FatNodeAvl<Data> {
         let item = &self.node_arena[new_node_ptr].datum;
 
         // Insertion
-        let root = self
-            .root_nodes
-            .last()
-            .and_then(|root_node| root_node.root);
-        
+        let root = self.root_nodes.last().and_then(|root_node| root_node.root);
+
         match root {
-            Some(root_ptr) => {
-                // Traversal
-                let mut path = Vec::new();
+            Some(mut parent_ptr) => {
+                let mut path = vec![parent_ptr];
 
-                let mut end_direction = Direction::LEFT;
-
-                let mut node_ptr = Some(root_ptr);
-                while let Some(ptr) = node_ptr {
-                    path.push(ptr);
-
-                    let curr_node = &self.node_arena[ptr];
-                    let children = curr_node.children.last();
-                    
-                    if *item >= curr_node.datum {
-                        end_direction = Direction::RIGHT;
-                        node_ptr =
-                            children.and_then(|latest_children| latest_children.right);
-                    } else {
-                        end_direction = Direction::LEFT;
-                        node_ptr =
-                            children.and_then(|latest_children| latest_children.left);
-                    }
+                while let Some(child_ptr) =
+                    self.node_arena[parent_ptr]
+                        .children
+                        .last()
+                        .and_then(|children| {
+                            if *item <= self.node_arena[parent_ptr].datum {
+                                children.left
+                            } else {
+                                children.right
+                            }
+                        })
+                {
+                    path.push(child_ptr);
+                    parent_ptr = child_ptr;
                 }
 
-                let parent_ptr = *path.last().unwrap(); 
-
-                // Perform actual insertion
-                match end_direction {
-                    Direction::LEFT => {
-                        self.node_arena[parent_ptr].modify_left(
-                            self.last_time,
-                            0,
-                            Some(new_node_ptr),
-                        );
-                    }
-                    Direction::RIGHT => {
-                        self.node_arena[parent_ptr].modify_right(
-                            self.last_time,
-                            0,
-                            Some(new_node_ptr),
-                        );
-                    }
+                if *item <= self.node_arena[parent_ptr].datum {
+                    self.node_arena[parent_ptr].modify_left(self.last_time, Some(new_node_ptr));
+                } else {
+                    self.node_arena[parent_ptr].modify_right(self.last_time, Some(new_node_ptr));
                 }
 
-                // Balance
-                self.update_heights(&path);
-                self.balance_lowest(&path, end_direction, self.last_time);
-            },
+                let new_root = self.balance(self.last_time, &path);
+                self.modify_root(new_root, self.last_time);
+            }
             None => self.modify_root(Some(new_node_ptr), self.last_time),
         }
 
