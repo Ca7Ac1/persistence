@@ -1,13 +1,13 @@
 use std::cmp::max;
 
-use crate::fat_node::*;
 use crate::persistent_avl_tree::PersistentAvlTree;
 use crate::timestamp::get_time;
+use crate::fat_node_avl::fat_node::{FatNode, RootNode};
 
 pub struct FatNodeAvl<Data: Ord> {
     node_arena: Vec<FatNode<Data>>,
     root_nodes: Vec<RootNode>,
-    last_time: u64,
+    last_time: u64
 }
 
 #[derive(Clone, Copy, Debug)]
