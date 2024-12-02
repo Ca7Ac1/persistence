@@ -46,6 +46,7 @@ impl<Data: Ord> FatNodeAvl<Data> {
         let new_root_ptr = old_root_right.expect("Failed to find right child for left rotation");
         let new_root = &self.node_arena[new_root_ptr];
 
+        // THIS IS WRONG YOU DON'T NEED GRANDCHILDREN
         let children = new_root
             .children
             .last()
@@ -81,6 +82,7 @@ impl<Data: Ord> FatNodeAvl<Data> {
         let new_root_ptr = old_root_left.expect("Failed to find left child for right rotation");
         let new_root = &self.node_arena[new_root_ptr];
 
+        // THIS IS WRONG YOU DON'T NEED GRANDCHILDREN
         let children = new_root
             .children
             .last()
