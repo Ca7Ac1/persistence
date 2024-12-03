@@ -2,7 +2,7 @@ use std::cmp::max;
 
 use crate::fat_node_avl::fat_node::{FatNode, RootNode};
 use crate::persistent_avl_tree::PersistentAvlTree;
-use crate::timestamp::{self, get_time};
+use crate::timestamp::get_time;
 
 pub struct FatNodeAvl<Data: Ord> {
     node_arena: Vec<FatNode<Data>>,
@@ -12,16 +12,15 @@ pub struct FatNodeAvl<Data: Ord> {
 
 impl<Data: Ord> FatNodeAvl<Data> {
     fn modify_root(&mut self, new_node_ptr: Option<usize>, timestamp: u64) {
-        match self
+        if let None = self
             .root_nodes
-            .last_mut()
-            .filter(|last_root| last_root.timestamp == timestamp)
+            .last()
+            .filter(|root_node| root_node.root == new_node_ptr)
         {
-            Some(same_root) => same_root.root = new_node_ptr,
-            None => self.root_nodes.push(RootNode {
+            self.root_nodes.push(RootNode {
                 timestamp,
                 root: new_node_ptr,
-            }),
+            });
         }
     }
 
@@ -127,8 +126,139 @@ impl<Data: Ord> PersistentAvlTree for FatNodeAvl<Data> {
         self.last_time - 1
     }
 
-    fn delete(&mut self, item: Self::Data) -> Option<Self::Timestamp> {
-        todo!()
+    fn delete(&mut self, item: &Self::Data) -> Option<Self::Timestamp> {
+        let mut parent_ptr = None;
+        let mut child_ptr = self
+            .root_nodes
+            .last()
+            .and_then(|root_node| root_node.root)?;
+
+        // Path keeping track of all modified nodes in order
+        let mut path = Vec::new();
+
+        // Traverse to node to delete
+        while self.node_arena[child_ptr].datum != *item {
+            path.push(child_ptr);
+            parent_ptr = Some(child_ptr);
+
+            let children = self.node_arena[child_ptr].children.last()?;
+
+            child_ptr = if self.node_arena[child_ptr].datum < *item {
+                children.right?
+            } else {
+                children.left?
+            };
+        }
+
+        let children_of_deleted = self.node_arena[child_ptr].children.last();
+
+        let left_of_deleted = children_of_deleted.and_then(|children| children.left);
+        let right_of_deleted = children_of_deleted.and_then(|children| children.left);
+
+        // match against both children of deleted node existing
+        match left_of_deleted.zip(right_of_deleted) {
+            Some((_, right_subtree_ptr)) => {
+                match self.node_arena[right_subtree_ptr]
+                    .children
+                    .last()
+                    .and_then(|children| children.left)
+                {
+                    // If the left child of our right subtree exists we find the
+                    // successor of our deleted node. Note that this successor
+                    // necessarily doesn't have a right child, as otherwise that
+                    // would be our successor. We replace our deleted node with its
+                    // successor, and give the successors right child to its parent.
+                    Some(mut sup_ptr) => {
+                        let mut sup_parent_ptr = right_subtree_ptr;
+                        let mut displaced_path = vec![sup_parent_ptr];
+
+                        while let Some(lesser) = self.node_arena[sup_ptr]
+                            .children
+                            .last()
+                            .and_then(|children| children.left)
+                        {
+                            sup_parent_ptr = sup_ptr;
+                            displaced_path.push(sup_parent_ptr);
+
+                            sup_ptr = lesser;
+                        }
+
+                        // Our path will be up to the deleted node, then the next 
+                        // node will be our successor, and then the next nodes will  
+                        // be the the path down to where our successor was located.
+                        path.push(sup_ptr);
+                        path.append(&mut displaced_path);
+
+                        let right_of_sup = self.node_arena[sup_ptr]
+                            .children
+                            .last()
+                            .and_then(|children| children.right);
+                        self.node_arena[sup_parent_ptr].modify_left(self.last_time, right_of_sup);
+
+                        self.node_arena[sup_ptr].modify_left(self.last_time, left_of_deleted);
+                        self.node_arena[sup_ptr].modify_right(self.last_time, right_of_deleted);
+
+                        if let Some(parent_ptr) = parent_ptr {
+                            if self.node_arena[parent_ptr].children.last().unwrap().left
+                                == Some(child_ptr)
+                            {
+                                self.node_arena[parent_ptr]
+                                    .modify_left(self.last_time, Some(sup_ptr));
+                            } else {
+                                self.node_arena[parent_ptr]
+                                    .modify_right(self.last_time, Some(sup_ptr));
+                            }
+                        };
+                    },
+
+                    // If the left child of our right subtree does not exist,
+                    // we give the left child of our deleted node to the right 
+                    // subtree, and replace our deleted node with its right child.
+                    None => {
+                        self.node_arena[right_subtree_ptr]
+                            .modify_left(self.last_time, left_of_deleted);
+
+                        if let Some(parent_ptr) = parent_ptr {
+                            if self.node_arena[parent_ptr].children.last().unwrap().left
+                                == Some(child_ptr)
+                            {
+                                self.node_arena[parent_ptr]
+                                    .modify_left(self.last_time, Some(right_subtree_ptr));
+                            } else {
+                                self.node_arena[parent_ptr]
+                                    .modify_right(self.last_time, Some(right_subtree_ptr));
+                            }
+                        };
+                    }
+                }
+            }
+            // If the deleted node has a single child then we replace it with that child.
+            // Otherwise if the deleted node has no children we remove it without replacement.
+            None => {
+                let new_child = if let None = left_of_deleted {
+                    right_of_deleted
+                } else if let None = right_of_deleted {
+                    left_of_deleted
+                } else {
+                    None
+                };
+
+                if let Some(parent_ptr) = parent_ptr {
+                    if self.node_arena[parent_ptr].children.last().unwrap().left == Some(child_ptr)
+                    {
+                        self.node_arena[parent_ptr].modify_left(self.last_time, new_child);
+                    } else {
+                        self.node_arena[parent_ptr].modify_right(self.last_time, new_child);
+                    }
+                };
+            }
+        }
+
+        let new_root = self.balance(self.last_time, &path);
+        self.modify_root(new_root, self.last_time);
+
+        self.last_time += 1;
+        Some(self.last_time - 1)
     }
 
     fn contains(&self, item: &Self::Data, timestamp: Self::Timestamp) -> bool {

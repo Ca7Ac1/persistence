@@ -46,11 +46,6 @@ impl<Data: Ord> FatNode<Data> {
             }),
         };
     }
-
-    pub(crate) fn set_height(&mut self, height: u64) {
-        self.height = height;
-    }
-
 }
 
 pub(crate) struct RootNode {
