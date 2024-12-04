@@ -30,17 +30,11 @@ impl<Data: Ord> PathCopyAvl<Data> {
         new_left_ptr: Option<usize>,
         new_right_ptr: Option<usize>,
     ) {
-        match update_cache.get(&node_ptr) {
-            Some(node) => {
-                update_cache.insert(node_ptr, node.update(height, new_left_ptr, new_right_ptr));
-            }
-            None => {
-                update_cache.insert(
-                    node_ptr,
-                    self.node_arena[node_ptr].update(height, new_left_ptr, new_right_ptr),
-                );
-            }
-        }
+        update_cache.insert(
+            node_ptr,
+            self.get_node(&update_cache, node_ptr)
+                .update(height, new_left_ptr, new_right_ptr),
+        );
     }
 
     fn modify_height(
