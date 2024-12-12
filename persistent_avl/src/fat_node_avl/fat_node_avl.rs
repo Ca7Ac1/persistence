@@ -51,26 +51,34 @@ impl<Data: Ord> FatNodeAvl<Data> {
     }
 
     fn balance_node(&mut self, timestamp: u64, node_ptr: usize) -> usize {
-        let node = &self.node_arena[node_ptr];
-        let b = self.balance_factor(node_ptr);
-        if b <= -2 {
-            let left_child_ptr = node.children.last().unwrap().left.unwrap();
+        let balance = self.balance_factor(node_ptr);
+        
+        if balance <= -2 {
+            let left_child_ptr = self.node_arena[node_ptr].children.last().unwrap().left.unwrap();
+            
             // LR
             if self.balance_factor(left_child_ptr) >= 1 {
                 let new_left_child_ptr = self.rotate(timestamp, left_child_ptr, RotationDirection::LEFT);
-                node.modify_left(timestamp, Some(new_left_child_ptr));
+
+                self.node_arena[node_ptr].modify_left(timestamp, Some(new_left_child_ptr));
+
                 self.set_height(node_ptr);
             }
+
             // LL & LR
             self.rotate(timestamp, node_ptr, RotationDirection::RIGHT)
-        } else if b >= 2 {
-            let right_child_ptr = node.children.last().unwrap().right.unwrap();
+        } else if balance >= 2 {
+            let right_child_ptr = self.node_arena[node_ptr].children.last().unwrap().right.unwrap();
+            
             // RL
             if self.balance_factor(right_child_ptr) <= -1 {
                 let new_right_child_ptr = self.rotate(timestamp, right_child_ptr, RotationDirection::RIGHT);
-                node.modify_right(timestamp, Some(new_right_child_ptr));
+                
+                self.node_arena[node_ptr].modify_right(timestamp, Some(new_right_child_ptr));
+                
                 self.set_height(node_ptr);
             }
+            
             // RL & RR
             self.rotate(timestamp, node_ptr, RotationDirection::LEFT)
         } else {
