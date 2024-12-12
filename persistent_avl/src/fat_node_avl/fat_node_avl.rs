@@ -10,11 +10,6 @@ pub struct FatNodeAvl<Data: Ord> {
     last_time: u64,
 }
 
-enum RotationDirection {
-    LEFT,
-    RIGHT,
-}
-
 impl<Data: Ord> FatNodeAvl<Data> {
     fn modify_root(&mut self, new_node_ptr: Option<usize>, timestamp: u64) {
         if let None = self
@@ -26,6 +21,13 @@ impl<Data: Ord> FatNodeAvl<Data> {
                 timestamp,
                 root: new_node_ptr,
             });
+        }
+    }
+
+    fn get_height(&self, node_ptr: Option<usize>) -> u64 {
+        match node_ptr {
+            Some(ptr) => self.node_arena[ptr].height,
+            None => 0,
         }
     }
 
@@ -50,50 +52,65 @@ impl<Data: Ord> FatNodeAvl<Data> {
         self.node_arena[node_ptr].height = child_height + 1;
     }
 
-    fn balance_node(&mut self, timestamp: u64, node_ptr: usize) -> usize {
-        let balance = self.balance_factor(node_ptr);
+    fn rotate_left(&mut self, timestamp: u64, original_root_ptr: usize) -> usize {
+        let original_root = &self.node_arena[original_root_ptr];
         
-        if balance <= -2 {
-            let left_child_ptr = self.node_arena[node_ptr].children.last().unwrap().left.unwrap();
-            
-            // LR
-            if self.balance_factor(left_child_ptr) >= 1 {
-                let new_left_child_ptr = self.rotate(timestamp, left_child_ptr, RotationDirection::LEFT);
+        let new_root_ptr = original_root.children.last().unwrap().right.unwrap();
+        let new_root = &self.node_arena[new_root_ptr];
 
-                self.node_arena[node_ptr].modify_left(timestamp, Some(new_left_child_ptr));
+        let original_root_left = original_root.children.last().and_then(|children| children.left);
+        let original_root_right = new_root.children.last().and_then(|children| children.left);
 
-                self.set_height(node_ptr);
-            }
+        let new_root_left = Some(original_root_ptr);
+        let new_root_right = new_root.children.last().and_then(|children| children.right);
 
-            // LL & LR
-            self.rotate(timestamp, node_ptr, RotationDirection::RIGHT)
-        } else if balance >= 2 {
-            let right_child_ptr = self.node_arena[node_ptr].children.last().unwrap().right.unwrap();
-            
-            // RL
-            if self.balance_factor(right_child_ptr) <= -1 {
-                let new_right_child_ptr = self.rotate(timestamp, right_child_ptr, RotationDirection::RIGHT);
-                
-                self.node_arena[node_ptr].modify_right(timestamp, Some(new_right_child_ptr));
-                
-                self.set_height(node_ptr);
-            }
-            
-            // RL & RR
-            self.rotate(timestamp, node_ptr, RotationDirection::LEFT)
-        } else {
-            node_ptr
-        }
-    }
+        // Input node is now lower
+        let original_root = &mut self.node_arena[original_root_ptr];
 
-    fn get_height(&self, node_ptr: Option<usize>) -> u64 {
-        match node_ptr {
-            Some(ptr) => self.node_arena[ptr].height,
-            None => 0,
-        }
-    }
+        original_root.modify_left(timestamp, original_root_left);
+        original_root.modify_right(timestamp, original_root_right);
+        self.set_height(original_root_ptr);
 
-    fn balance_factor(&self, node_ptr: usize) -> i32 {
+        // Child node is now upper
+        let new_root = &mut self.node_arena[original_root_ptr];
+
+        new_root.modify_left(timestamp, new_root_left);
+        new_root.modify_right(timestamp, new_root_right);
+        self.set_height(new_root_ptr);
+
+        new_root_ptr
+    } 
+
+    fn rotate_right(&mut self, timestamp: u64, original_root_ptr: usize) -> usize {
+        let original_root = &self.node_arena[original_root_ptr];
+        
+        let new_root_ptr = original_root.children.last().unwrap().left.unwrap();
+        let new_root = &self.node_arena[new_root_ptr];
+
+        let original_root_left = original_root.children.last().and_then(|children| children.right);
+        let original_root_right = new_root.children.last().and_then(|children| children.right);
+
+        let new_root_left = new_root.children.last().and_then(|children| children.left);
+        let new_root_right = Some(original_root_ptr);
+
+        // Input node is now lower
+        let original_root = &mut self.node_arena[original_root_ptr];
+
+        original_root.modify_left(timestamp, original_root_left);
+        original_root.modify_right(timestamp, original_root_right);
+        self.set_height(original_root_ptr);
+
+        // Child node is now upper
+        let new_root = &mut self.node_arena[original_root_ptr];
+
+        new_root.modify_left(timestamp, new_root_left);
+        new_root.modify_right(timestamp, new_root_right);
+        self.set_height(new_root_ptr);
+
+        new_root_ptr
+    } 
+
+    fn get_balance_factor(&self, node_ptr: usize) -> i32 {
         let node = &self.node_arena[node_ptr];
         match node.children.last() {
             Some(cat) => self.get_height(cat.right) as i32 - self.get_height(cat.left) as i32,
@@ -101,48 +118,40 @@ impl<Data: Ord> FatNodeAvl<Data> {
         }
     }
 
-    /// Precondition: the child in the opposite direction of rotation exists.
-    /// Rotates the tree in the given direction, updating pointers via pushing to node.
-    fn rotate(&mut self, timestamp: u64, node_ptr: usize, direction: RotationDirection) -> usize {
-        let node = &self.node_arena[node_ptr];
-        let child_ptr = match direction {
-            // See the precondition for the unwrap
-            RotationDirection::LEFT => node.children.last().unwrap().right.unwrap(),
-            RotationDirection::RIGHT => node.children.last().unwrap().left.unwrap(),
-        };
-        let child_node = &self.node_arena[child_ptr];
+    fn balance_node(&mut self, timestamp: u64, node_ptr: usize) -> usize {
+        let balance = self.get_balance_factor(node_ptr);
+        
+        if balance <= -2 {
+            let left_child_ptr = self.node_arena[node_ptr].children.last().unwrap().left.unwrap();
+            
+            // LR
+            if self.get_balance_factor(left_child_ptr) >= 1 {
+                let new_left_child = self.rotate_left(timestamp, left_child_ptr);
 
-        let lower_left = match direction {
-            RotationDirection::LEFT => node.children.last().and_then(|cat| cat.left),
-            RotationDirection::RIGHT => child_node.children.last().and_then(|cat| cat.right),
-        };
-        let lower_right = match direction {
-            RotationDirection::LEFT => child_node.children.last().and_then(|cat| cat.left),
-            RotationDirection::RIGHT => node.children.last().and_then(|cat| cat.right),
-        };
+                self.node_arena[node_ptr].modify_left(timestamp, Some(new_left_child));
 
-        let upper_left = match direction {
-            RotationDirection::LEFT => Some(node_ptr),
-            RotationDirection::RIGHT => child_node.children.last().and_then(|cat| cat.left),
-        };
-        let upper_right = match direction {
-            RotationDirection::LEFT => child_node.children.last().and_then(|cat| cat.right),
-            RotationDirection::RIGHT => Some(node_ptr),
-        };
+                self.set_height(node_ptr);
+            }
 
-        // Input node is now lower
-        let node = &mut self.node_arena[node_ptr];
-        node.modify_left(timestamp, lower_left);
-        node.modify_right(timestamp, lower_right);
-        self.set_height(node_ptr);
-
-        // Child node is now upper
-        let child_node = &mut self.node_arena[node_ptr];
-        child_node.modify_left(timestamp, upper_left);
-        child_node.modify_right(timestamp, upper_right);
-        self.set_height(child_ptr);
-
-        child_ptr
+            // LL & LR
+            self.rotate_right(timestamp, node_ptr)
+        } else if balance >= 2 {
+            let right_child_ptr = self.node_arena[node_ptr].children.last().unwrap().right.unwrap();
+            
+            // RL
+            if self.get_balance_factor(right_child_ptr) <= -1 {
+                let new_right_child_ptr = self.rotate_right(timestamp, right_child_ptr);
+                
+                self.node_arena[node_ptr].modify_right(timestamp, Some(new_right_child_ptr));
+                
+                self.set_height(node_ptr);
+            }
+            
+            // RL & RR
+            self.rotate_left(timestamp, node_ptr)
+        } else {
+            node_ptr
+        }
     }
 
     /// Calculates the heights and rebalances the tree up `path`
