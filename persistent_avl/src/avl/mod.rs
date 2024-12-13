@@ -1,1 +1,1 @@
-mod avl;
+pub(crate) mod avl;
