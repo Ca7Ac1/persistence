@@ -20,11 +20,15 @@ pub(crate) struct FatNode<Data: Ord> {
     pub(crate) children: Vec<ChildrenAtTime>,
 }
 
-// All modifications to a FatNode assume that the given 
+// All modifications to a FatNode assume that the given
 // timestamp is >= the timestamp of latest child
 impl<Data: Ord> FatNode<Data> {
     pub(crate) fn modify_left(&mut self, timestamp: u64, new_left: Option<usize>) {
-        match self.children.last_mut().filter(|last_children| last_children.timestamp == timestamp) {
+        match self
+            .children
+            .last_mut()
+            .filter(|last_children| last_children.timestamp == timestamp)
+        {
             // When last children exist & match your timestamp, just mutate instead
             Some(last_children) => last_children.left = new_left,
             None => self.children.push(ChildrenAtTime {
@@ -36,7 +40,11 @@ impl<Data: Ord> FatNode<Data> {
     }
 
     pub(crate) fn modify_right(&mut self, timestamp: u64, new_right: Option<usize>) {
-        match self.children.last_mut().filter(|last_children| last_children.timestamp == timestamp) {
+        match self
+            .children
+            .last_mut()
+            .filter(|last_children| last_children.timestamp == timestamp)
+        {
             // When last children exist & match your timestamp, just mutate instead
             Some(last_children) => last_children.right = new_right,
             None => self.children.push(ChildrenAtTime {
