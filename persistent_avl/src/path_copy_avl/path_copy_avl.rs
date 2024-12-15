@@ -130,9 +130,9 @@ impl<Data: Ord> PersistentAvlTree for PathCopyAvl<Data> {
             let node_datum = self.get_data(node);
 
             if *item <= *node_datum {
-                path_ptr = node.right;
+                path_ptr = node.left;
             } else {
-                path_ptr = node.left
+                path_ptr = node.right;
             }
         }
 
