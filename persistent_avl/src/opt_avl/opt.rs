@@ -8,7 +8,29 @@ pub(crate) struct OptAVLNode<'a, Timestamp: Ord> {
     r2: Option<usize>,
 }
 
-impl<Timestamp: Clone + Ord> OptAVLNode<'_, Timestamp> {
+impl<Timestamp: Ord> OptAVLNode<'_, Timestamp> {
+    pub(crate) fn get_left(
+        &self,
+        timestamp: &Timestamp,
+    ) -> Option<usize> {
+        if timestamp < self.timestamp {
+            self.l1
+        } else {
+            self.l2
+        }
+    }
+
+    pub(crate) fn get_right(
+        &self,
+        timestamp: &Timestamp,
+    ) -> Option<usize> {
+        if timestamp < self.timestamp {
+            self.r1
+        } else {
+            self.r2
+        }
+    }
+
     /// These functions are helpers for rotations.
 
     /// Ignores the presence of any pre-existing pointers.
@@ -33,9 +55,9 @@ impl<Timestamp: Clone + Ord> OptAVLNode<'_, Timestamp> {
         timestamp: &Timestamp,
     ) {
         if timestamp < self.timestamp {
-            self.l1 = new_ptr;
+            self.r1 = new_ptr;
         } else {
-            self.l2 = new_ptr;
+            self.r2 = new_ptr;
         }
     }
 
