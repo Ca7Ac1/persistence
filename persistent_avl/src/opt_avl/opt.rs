@@ -1,11 +1,11 @@
 pub(crate) struct OptAVLNode<'a, Timestamp: Ord> {
-    datum_ptr: usize,
-    height: u64,
-    timestamp: &'a Timestamp, // Remark: For data, it is reasonable for the tree to own the data. Not so much for timestamps.
-    l1: Option<usize>,
-    r1: Option<usize>,
-    l2: Option<usize>,
-    r2: Option<usize>,
+    pub(crate) datum_ptr: usize,
+    pub(crate) height: u64,
+    pub(crate) timestamp: &'a Timestamp, // Remark: For data, it is reasonable for the tree to own the data. Not so much for timestamps.
+    pub(crate) l1: Option<usize>,
+    pub(crate) r1: Option<usize>,
+    pub(crate) l2: Option<usize>,
+    pub(crate) r2: Option<usize>,
 }
 
 impl<Timestamp: Ord> OptAVLNode<'_, Timestamp> {

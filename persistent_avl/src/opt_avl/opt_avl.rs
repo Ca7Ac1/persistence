@@ -95,4 +95,49 @@ impl<'a, Data: Ord, Timestamp: Ord> OptAVL<'a, Data, Timestamp> {
             }
         }
     }
+
+    /// Precondition: timestamp is newest
+    pub fn insert(&mut self, datum: Data, timestamp: &'a Timestamp) {
+        // Allocate datum
+        self.data_arena.push(datum);
+        let datum_ptr = self.data_arena.len() - 1;
+        let datum = &self.data_arena[datum_ptr];
+
+        // Allocate node
+        self.node_arena.push(OptAVLNode {
+            datum_ptr,
+            height: 0,
+            timestamp,
+            l1: None,
+            r1: None,
+            l2: None,
+            r2: None,
+        });
+        let node_ptr = self.node_arena.len() - 1;
+
+        // Traverse
+        let mut path_ptr = self.roots.last_key_value().and_then(|(_, ptr)| *ptr);
+
+        let mut path = Vec::new();
+        let mut last_dir = ParentToChildDirection::RootToChild;
+        while let Some(ptr) = path_ptr {
+            path.push(ptr);
+
+            let node_datum = &self.data_arena[self.node_arena[ptr].datum_ptr];
+
+            if *datum <= *node_datum {
+                path_ptr = self.get_left(Some(ptr), timestamp);
+                last_dir = ParentToChildDirection::Left;
+            } else {
+                path_ptr = self.get_right(Some(ptr), timestamp);
+                last_dir = ParentToChildDirection::Right;
+            }
+        }
+
+        match last_dir {
+            ParentToChildDirection::Left => self.update_left_pointer(&path, Some(node_ptr), timestamp),
+            ParentToChildDirection::Right => self.update_right_pointer(&path, Some(node_ptr), timestamp),
+            ParentToChildDirection::RootToChild => { self.roots.insert(timestamp, Some(node_ptr)); },
+        }
+    }
 }
